@@ -1,0 +1,13 @@
+{
+  "name": "dotnet-interview-prep",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Searchable .NET interview preparation site. Content lives in content/*.md|*.json, deployed to GitHub Pages.",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/serve.mjs",
+    "start": "node scripts/serve.mjs"
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "title": "DTO & Mapping",
+  "description": "Data Transfer Objects, records, object mapping and request validation in ASP.NET Core",
+  "icon": "DTO",
+  "color": "#ca8a04",
+  "sections": [
+    {
+      "heading": "DTO Basics",
+      "questions": [
+        {
+          "id": "why-use-dtos",
+          "question": "What is a DTO and why shouldn't you expose EF Core entities directly from an API?",
+          "difficulty": "Easy",
+          "tags": [
+            "dto",
+            "api",
+            "mapping",
+            "ef-core"
+          ],
+          "definition": "A Data Transfer Object (DTO) is a simple object whose only job is to carry data across a boundary, such as an HTTP API.\nIt contains properties but no business logic or persistence behavior.\nDTOs decouple the public API contract from the internal domain or database model.\nThey let you shape the response: hide sensitive fields, flatten relationships and combine data from several sources.\nSeparate request and response DTOs make it explicit which fields a client may send and which it receives.\nThis protects against over-posting (mass assignment) and accidental data leaks.\nIt also avoids serialization problems such as circular references and lazy-loading surprises.",
+          "answer": "I'd explain it this way: **entities model the database, DTOs model the contract**. The moment I return an entity from a controller, my table structure becomes my public API, and any column rename is a breaking change for clients.\n\nKey reasons I use DTOs:\n- **Security** – an entity may have `PasswordHash`, `IsAdmin` or internal flags. Binding a request directly to an entity allows **over-posting**: a client sends `\"isAdmin\": true` and it gets saved.\n- **Stable contract** – I can refactor the schema and keep the DTO unchanged, or version DTOs (`OrderV2Dto`).\n- **Performance** – projecting into a DTO with `Select` fetches only needed columns and skips change tracking.\n- **Serialization safety** – no `Order -> Customer -> Orders` cycles and no lazy-load N+1 triggered by the serializer.\n- **Shape per use case** – a list view needs 4 fields, a detail view needs 20.\n\n| | Entity | DTO |\n|---|---|---|\n| Purpose | persistence / domain | transport |\n| Behavior | may have logic, invariants | none |\n| Relationships | navigation properties | flattened or nested DTOs |\n| Changes when | schema changes | API contract changes |\n\nIn real projects I typically have `CreateOrderRequest`, `UpdateOrderRequest` and `OrderResponse` per feature, often colocated in a vertical-slice folder.\n\nPitfalls: creating **one giant DTO** reused for create, update and read (back to over-posting); and DTO explosion — for internal, trusted endpoints a little pragmatism is fine.\n\n> **Likely follow-ups:** \"Isn't this just duplication?\" (yes, intentional — it's the cost of decoupling), \"DTO vs ViewModel?\" (a ViewModel is a DTO shaped for a specific UI view, often with display logic).",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Entity vs request/response DTOs in a Minimal API",
+              "code": "// Entity – internal, mapped by EF Core\npublic class User\n{\n    public int Id { get; set; }\n    public string Email { get; set; } = default!;\n    public string PasswordHash { get; set; } = default!;   // must never leave the server\n    public bool IsAdmin { get; set; }                      // must never be client-settable\n    public DateTime CreatedAt { get; set; }\n    public List<Order> Orders { get; set; } = [];          // would cause cycles / N+1\n}\n\n// Request DTO – only what a client may send (no IsAdmin → no over-posting)\npublic sealed record CreateUserRequest(string Email, string Password);\n\n// Response DTO – only what a client should see, flattened\npublic sealed record UserResponse(int Id, string Email, int OrderCount, DateTime CreatedAt);\n\napp.MapPost(\"/users\", async (CreateUserRequest req, AppDbContext db, IPasswordHasher<User> hasher) =>\n{\n    var user = new User { Email = req.Email, CreatedAt = DateTime.UtcNow };\n    user.PasswordHash = hasher.HashPassword(user, req.Password);\n\n    db.Users.Add(user);\n    await db.SaveChangesAsync();\n\n    return Results.Created($\"/users/{user.Id}\",\n        new UserResponse(user.Id, user.Email, 0, user.CreatedAt));\n});\n\napp.MapGet(\"/users/{id:int}\", async (int id, AppDbContext db) =>\n    await db.Users\n        .Where(u => u.Id == id)\n        // Projection: selects 4 columns + a COUNT subquery, no tracking, no PasswordHash\n        .Select(u => new UserResponse(u.Id, u.Email, u.Orders.Count, u.CreatedAt))\n        .FirstOrDefaultAsync() is { } dto ? Results.Ok(dto) : Results.NotFound());"
+            }
+          ]
+        },
+        {
+          "id": "records-as-dtos",
+          "question": "Why are C# records a good fit for DTOs, and what should you watch out for?",
+          "difficulty": "Medium",
+          "tags": [
+            "dto",
+            "records",
+            "csharp",
+            "api"
+          ],
+          "definition": "A record is a C# type designed for immutable, data-centric models, available as a class (record) or struct (record struct).\nPositional records generate a primary constructor, init-only properties and deconstruction from one line.\nRecords use value-based equality, so two instances with the same data are considered equal.\nThey also generate a readable ToString and support non-destructive mutation with the with expression.\nThese traits match what a DTO is: a small, immutable bag of data with no identity or behavior.\nSystem.Text.Json fully supports deserializing positional records through their constructor.\nAttributes such as validation or JSON annotations can be targeted at the generated properties with property:.",
+          "answer": "In my experience records are now **the default choice for DTOs** in modern .NET because they remove boilerplate and encourage immutability.\n\nWhat I like:\n- **Concise** – `public sealed record OrderResponse(int Id, decimal Total);` replaces a 15-line class.\n- **Immutable by default** – a DTO shouldn't be mutated as it passes through layers; `with` creates modified copies.\n- **Value equality** – great in unit tests: `Assert.Equal(expectedDto, actualDto)` compares contents.\n- **Works with System.Text.Json, Minimal APIs, MVC binding and OpenAPI**.\n\n| | `class` DTO | positional `record` | `record struct` |\n|---|---|---|---|\n| Boilerplate | high | minimal | minimal |\n| Equality | reference | value | value |\n| Immutability | manual | init-only by default | mutable unless `readonly` |\n| Allocation | heap | heap | stack/inline |\n\nPitfalls and follow-ups I mention:\n- **Attribute targets** – on positional parameters, `[Required]` applies to the constructor parameter. MVC validation handles that, but for property-only attributes like `[JsonPropertyName]` I use `[property: JsonPropertyName(\"id\")]`.\n- **Collections break value equality** – a `List<T>` property is compared by reference, so two records with equal lists aren't equal.\n- **Not for EF Core entities** – value equality conflicts with change tracking's identity semantics.\n- **Nullable reference types** – `string Name` in a record isn't enforced at runtime by the JSON deserializer unless .NET 9's `RespectNullableAnnotations` is enabled or you validate; use `required` members or validation.\n\n> **Follow-ups:** \"record vs record struct?\", \"What does `with` do under the hood?\" (calls a generated copy constructor, then sets the changed init properties).",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Records as request/response DTOs",
+              "code": "using System.ComponentModel.DataAnnotations;\nusing System.Text.Json.Serialization;\n\n// Positional record – compact response DTO\npublic sealed record OrderResponse(\n    int Id,\n    [property: JsonPropertyName(\"customer\")] string CustomerName,  // attribute on the property\n    decimal Total,\n    IReadOnlyList<OrderLineResponse> Lines);\n\npublic sealed record OrderLineResponse(string Product, int Quantity, decimal UnitPrice);\n\n// Nominal record with required init members – clearer for larger request DTOs\npublic sealed record CreateProductRequest\n{\n    [Required, StringLength(100)]\n    public required string Name { get; init; }\n\n    [Range(0.01, 100_000)]\n    public required decimal Price { get; init; }\n\n    public string? Description { get; init; }\n}\n\n// Value equality and non-destructive mutation\nvar a = new OrderLineResponse(\"Keyboard\", 1, 49.99m);\nvar b = a with { Quantity = 2 };                         // new instance, a unchanged\nConsole.WriteLine(a == new OrderLineResponse(\"Keyboard\", 1, 49.99m)); // True\nConsole.WriteLine(b);  // OrderLineResponse { Product = Keyboard, Quantity = 2, UnitPrice = 49.99 }"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Mapping & Validation",
+      "questions": [
+        {
+          "id": "automapper-vs-manual-mapping",
+          "question": "AutoMapper vs manual mapping: which do you prefer and why?",
+          "difficulty": "Medium",
+          "tags": [
+            "mapping",
+            "automapper",
+            "dto",
+            "performance"
+          ],
+          "definition": "Object mapping is the process of copying data between types, typically from entities to DTOs and back.\nAutoMapper is a convention-based library that maps properties with matching names using configured profiles.\nIt supports flattening, custom member mappings and LINQ projection through ProjectTo.\nManual mapping is hand-written code, often as static methods, extension methods or constructors.\nSource-generated mappers such as Mapperly generate mapping code at compile time with no reflection.\nManual and generated mapping give compile-time safety and easy debugging.\nConvention-based mapping reduces boilerplate but hides logic and moves errors to runtime.",
+          "answer": "In my experience the honest answer is **\"it depends on team size and model complexity\"**, but for new .NET 8/9 projects I lean towards **manual mapping or a source generator like Mapperly**.\n\n| | AutoMapper | Manual | Mapperly (source gen) |\n|---|---|---|---|\n| Boilerplate | low | high | low |\n| Errors found | runtime (unless config validated) | compile time | compile time |\n| Debuggability | hard (magic) | trivial | readable generated code |\n| Performance | good, some overhead | fastest | as fast as manual |\n| EF query projection | `ProjectTo<T>()` | `Select(...)` expression | generated `IQueryable` projections |\n| Licensing | commercial license for v15+ | none | open source |\n\nWhy I've moved away from AutoMapper on many projects:\n- **Find All References fails** – renaming a property silently breaks a convention mapping.\n- **Business logic creeps into profiles** (`ForMember(... ResolveUsing ...)`), where nobody looks for it.\n- AutoMapper moved to a **commercial license** in 2025, which matters for many companies.\n\nWhen AutoMapper still makes sense: a large existing codebase with hundreds of flat, near-identical DTOs. If I use it, I always call `config.AssertConfigurationIsValid()` in a unit test so missing members fail the build.\n\nPitfalls to mention:\n- Mapping **after** `ToList()` loads full entities — map inside the query with `Select`/`ProjectTo` instead.\n- Mapping **DTO → entity** blindly re-enables over-posting; I prefer explicit update methods on the entity.\n\n> **Follow-ups:** \"How do you test mappings?\", \"Where should mapping code live?\" (close to the DTO or the endpoint, not in the domain layer).",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Manual mapping with a reusable projection expression",
+              "code": "public static class OrderMappings\n{\n    // Expression: EF Core translates it to SQL, so only needed columns are read\n    public static readonly Expression<Func<Order, OrderResponse>> ToResponse = o =>\n        new OrderResponse(\n            o.Id,\n            o.Customer.FirstName + \" \" + o.Customer.LastName,   // flattening\n            o.Lines.Sum(l => l.Quantity * l.UnitPrice),\n            o.Lines.Select(l => new OrderLineResponse(l.Product.Name, l.Quantity, l.UnitPrice))\n                   .ToList());\n\n    // In-memory mapping for an already-loaded entity\n    public static OrderLineResponse ToResponse(this OrderLine l) =>\n        new(l.Product.Name, l.Quantity, l.UnitPrice);\n\n    // Request -> entity: explicit, so only allowed fields are copied\n    public static Order ToEntity(this CreateOrderRequest r, int customerId) => new()\n    {\n        CustomerId = customerId,\n        CreatedAt  = DateTime.UtcNow,\n        Lines = r.Lines.Select(x => new OrderLine { ProductId = x.ProductId, Quantity = x.Quantity }).ToList()\n    };\n}\n\n// Usage: projection runs in the database\nvar orders = await db.Orders\n    .Where(o => o.CustomerId == customerId)\n    .Select(OrderMappings.ToResponse)\n    .ToListAsync(ct);"
+            },
+            {
+              "language": "csharp",
+              "title": "AutoMapper and Mapperly equivalents",
+              "code": "// AutoMapper: convention-based profile, validated in a unit test\npublic class OrderProfile : Profile\n{\n    public OrderProfile()\n    {\n        CreateMap<Order, OrderResponse>()\n            .ForCtorParam(\"CustomerName\",\n                o => o.MapFrom(s => s.Customer.FirstName + \" \" + s.Customer.LastName))\n            .ForCtorParam(\"Total\", o => o.MapFrom(s => s.Lines.Sum(l => l.Quantity * l.UnitPrice)));\n    }\n}\n// var dtos = await db.Orders.ProjectTo<OrderResponse>(mapper.ConfigurationProvider).ToListAsync();\n// [Fact] public void Config_is_valid() => config.AssertConfigurationIsValid();\n\n// Mapperly: code is generated at compile time – no reflection, warnings for unmapped members\n[Mapper]\npublic static partial class ProductMapper\n{\n    public static partial ProductResponse ToResponse(this Product product);\n    public static partial IQueryable<ProductResponse> ProjectToResponse(this IQueryable<Product> q);\n}"
+            }
+          ]
+        },
+        {
+          "id": "dto-validation-fluentvalidation",
+          "question": "How do you validate DTOs in ASP.NET Core: DataAnnotations vs FluentValidation?",
+          "difficulty": "Hard",
+          "tags": [
+            "validation",
+            "fluentvalidation",
+            "dto",
+            "api"
+          ],
+          "definition": "Input validation checks that incoming request DTOs meet the rules before any business logic runs.\nDataAnnotations are attributes such as [Required], [StringLength] and [Range] placed on DTO properties.\nIn MVC controllers with [ApiController], invalid models automatically return a 400 ValidationProblemDetails response.\nMinimal APIs gained built-in DataAnnotations validation in .NET 10; earlier versions need a filter or library.\nFluentValidation is a library that defines rules in a separate AbstractValidator<T> class with a fluent API.\nIt supports conditional, cross-property and async rules and is easy to unit test.\nValidation of DTO shape belongs at the API boundary, while business invariants belong in the domain.",
+          "answer": "In my experience **DataAnnotations are fine for simple, declarative rules**, and **FluentValidation wins once rules get conditional or need dependencies** like a database check.\n\n| | DataAnnotations | FluentValidation |\n|---|---|---|\n| Where rules live | attributes on the DTO | separate validator class |\n| Conditional / cross-field | awkward (`IValidatableObject`) | `When`, `Must`, `DependentRules` |\n| Async / DI (e.g. DB lookup) | no | `MustAsync` with injected services |\n| Testability | via `Validator.TryValidateObject` | `TestValidate` helpers |\n| Auto 400 in MVC | yes, with `[ApiController]` | manual call (auto-validation package is deprecated) |\n| Minimal APIs | built-in from .NET 10 | endpoint filter |\n\nHow I wire it up:\n- Register validators with `AddValidatorsFromAssemblyContaining<T>()`.\n- In Minimal APIs I use a **generic endpoint filter** that resolves `IValidator<T>`, validates and returns `Results.ValidationProblem(errors.ToDictionary())` — consistent RFC 7807 responses.\n- In MVC I call `ValidateAsync` explicitly in the action or via a filter, because the FluentValidation team **deprecated automatic MVC pipeline integration**.\n\nPitfalls I mention:\n- **Duplicating domain rules** in validators — validators check input shape; the domain still enforces invariants (e.g. \"can't ship a cancelled order\").\n- **Heavy async DB checks** for uniqueness are racy; keep a unique index in the database as the real guarantee.\n- **Value types and `[Required]`** – `int Quantity` is never null, so `[Required]` does nothing; use `int?` or `[Range]`.\n\n> **Follow-ups:** \"Where would you validate in a MediatR/CQRS setup?\" (a pipeline behavior), \"How do you localize messages?\" (`WithMessage` + resource files).",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "FluentValidation validator with conditional and async rules",
+              "code": "public sealed record CreateOrderRequest(\n    string CustomerEmail,\n    string? CouponCode,\n    bool IsGift,\n    string? GiftMessage,\n    IReadOnlyList<OrderLineRequest> Lines);\n\npublic sealed record OrderLineRequest(int ProductId, int Quantity);\n\npublic sealed class CreateOrderRequestValidator : AbstractValidator<CreateOrderRequest>\n{\n    public CreateOrderRequestValidator(ICouponService coupons)\n    {\n        RuleFor(x => x.CustomerEmail).NotEmpty().EmailAddress().MaximumLength(256);\n\n        RuleFor(x => x.Lines).NotEmpty().WithMessage(\"An order needs at least one line.\");\n        RuleForEach(x => x.Lines).ChildRules(line =>\n        {\n            line.RuleFor(l => l.ProductId).GreaterThan(0);\n            line.RuleFor(l => l.Quantity).InclusiveBetween(1, 100);\n        });\n\n        // Conditional rule: gift message only required for gifts\n        RuleFor(x => x.GiftMessage).NotEmpty().MaximumLength(500).When(x => x.IsGift);\n\n        // Async rule using an injected service\n        RuleFor(x => x.CouponCode!)\n            .MustAsync((code, ct) => coupons.IsActiveAsync(code, ct))\n            .WithMessage(\"Coupon '{PropertyValue}' is invalid or expired.\")\n            .When(x => !string.IsNullOrEmpty(x.CouponCode));\n    }\n}"
+            },
+            {
+              "language": "csharp",
+              "title": "Reusable Minimal API validation filter",
+              "code": "public sealed class ValidationFilter<T>(IValidator<T> validator) : IEndpointFilter\n{\n    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)\n    {\n        var dto = ctx.Arguments.OfType<T>().FirstOrDefault();\n        if (dto is null)\n            return Results.BadRequest();\n\n        var result = await validator.ValidateAsync(dto, ctx.HttpContext.RequestAborted);\n        if (!result.IsValid)\n            return Results.ValidationProblem(result.ToDictionary()); // RFC 7807 400 response\n\n        return await next(ctx);\n    }\n}\n\n// Program.cs\nbuilder.Services.AddValidatorsFromAssemblyContaining<CreateOrderRequestValidator>();\n\napp.MapPost(\"/orders\", (CreateOrderRequest req, IOrderService svc) => svc.CreateAsync(req))\n   .AddEndpointFilter<ValidationFilter<CreateOrderRequest>>();\n\n// DataAnnotations alternative in MVC: [ApiController] returns 400 automatically\npublic sealed record UpdateEmailRequest([Required, EmailAddress, StringLength(256)] string Email);"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

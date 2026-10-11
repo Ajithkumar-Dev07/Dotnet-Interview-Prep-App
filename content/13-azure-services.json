@@ -1,0 +1,103 @@
+{
+  "title": "Azure Services",
+  "description": "Core Azure services for .NET developers - hosting, secrets, messaging and storage with the modern Azure SDKs",
+  "icon": "Az",
+  "color": "#0284c7",
+  "sections": [
+    {
+      "heading": "Compute & Hosting",
+      "questions": [
+        {
+          "id": "app-service-vs-functions",
+          "question": "When would you choose Azure App Service vs Azure Functions?",
+          "difficulty": "Medium",
+          "tags": [
+            "azure",
+            "cloud",
+            "serverless",
+            "hosting"
+          ],
+          "definition": "**Azure App Service** is a fully managed PaaS for hosting web apps, REST APIs and background WebJobs on Windows or Linux.\nIt runs on a dedicated App Service Plan that you pay for continuously, whether or not traffic arrives.\n**Azure Functions** is an event-driven, serverless compute service that runs small units of code in response to triggers.\nTriggers include HTTP, timers, Service Bus, Blob Storage and Event Grid.\nFunctions can run on the Flex Consumption plan (scale to zero, pay per execution), the Premium plan (pre-warmed instances, VNet) or a Dedicated plan.\nFor .NET, Functions use the **isolated worker model**, because the in-process model reaches end of support in November 2026.\nIn short, App Service suits long-running, always-on web workloads, and Functions suit bursty, event-driven tasks.",
+          "answer": "I'd frame it as **always-on web app vs event-driven glue code**.\n\n| | App Service | Azure Functions |\n|---|---|---|\n| Model | Host a full app (ASP.NET Core, containers) | Individual functions per trigger |\n| Billing | Per plan instance, 24/7 | Per execution/GB-s (Consumption/Flex) or plan |\n| Scale | Manual/autoscale rules | Event-driven, to zero (Flex/Consumption) |\n| Cold start | None (Always On) | Possible on Consumption; mitigated on Premium/Flex always-ready |\n| Execution time | Unlimited | Limited per plan (e.g. 5–10 min default on Consumption) |\n| Triggers/bindings | You write the plumbing | Built-in triggers and output bindings |\n\n**When I pick App Service:**\n- Customer-facing APIs and MVC/Blazor apps with steady traffic and strict latency.\n- Features such as deployment slots, custom domains and Easy Auth.\n- Long-running requests or WebSockets/SignalR.\n\n**When I pick Functions:**\n- Processing a Service Bus queue, reacting to blob uploads or running nightly jobs on a timer trigger.\n- Spiky workloads where scaling to zero saves money.\n- Orchestrations with **Durable Functions** (fan-out/fan-in, human approval).\n\nIn my experience, a common architecture is an API on App Service that publishes messages to Service Bus, with Functions processing them asynchronously.\n\n**Pitfalls and follow-ups:**\n- Cold starts on Consumption plans for latency-sensitive HTTP endpoints.\n- Creating a new `HttpClient` or SDK client per invocation instead of registering singletons in DI.\n- Not making functions **idempotent**, because triggers deliver *at least once*.\n- \"What about Container Apps?\" I'd choose Container Apps for containerised microservices that need KEDA scaling and Dapr, sitting between the two options.",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Isolated worker Azure Function: Service Bus trigger + timer (.NET 8)",
+              "code": "// Program.cs - isolated worker model with DI\nvar host = new HostBuilder()\n    .ConfigureFunctionsWebApplication()\n    .ConfigureServices(s =>\n    {\n        s.AddApplicationInsightsTelemetryWorkerService();\n        s.AddSingleton<IOrderProcessor, OrderProcessor>();   // reused across invocations\n    })\n    .Build();\nhost.Run();\n\npublic sealed class OrderFunctions(IOrderProcessor processor, ILogger<OrderFunctions> log)\n{\n    // Runs for every message on the 'orders' queue (at-least-once delivery)\n    [Function(\"ProcessOrder\")]\n    public async Task ProcessOrder(\n        [ServiceBusTrigger(\"orders\", Connection = \"ServiceBus\")] OrderCreated message,\n        CancellationToken ct)\n    {\n        log.LogInformation(\"Processing order {OrderId}\", message.OrderId);\n        await processor.HandleAsync(message, ct);             // must be idempotent\n    }\n\n    // Nightly cleanup at 02:00 UTC\n    [Function(\"NightlyCleanup\")]\n    public Task Cleanup([TimerTrigger(\"0 0 2 * * *\")] TimerInfo timer)\n        => processor.PurgeExpiredAsync();\n}\n\npublic record OrderCreated(Guid OrderId, decimal Total);"
+            }
+          ]
+        },
+        {
+          "id": "azure-key-vault",
+          "question": "What is Azure Key Vault and how do you use it securely from a .NET application?",
+          "difficulty": "Easy",
+          "tags": [
+            "azure",
+            "security",
+            "cloud",
+            "configuration"
+          ],
+          "definition": "**Azure Key Vault** is a managed cloud service for securely storing and controlling access to secrets, cryptographic keys and certificates.\nSecrets include values such as connection strings, API keys and passwords.\nKeys can be software-protected, or backed by HSMs in the Premium tier and Managed HSM.\nAccess is controlled with Microsoft Entra ID, preferably through **Azure RBAC** roles such as *Key Vault Secrets User*.\nApplications authenticate with **managed identities**, so no credentials are stored in code or configuration.\nEvery access is audited, and features such as soft delete, purge protection and versioning protect against accidental loss.\nIn .NET, the `Azure.Extensions.AspNetCore.Configuration.Secrets` package loads secrets into `IConfiguration`, and `SecretClient` gives direct access.",
+          "answer": "I'd explain Key Vault as the answer to **\"where do secrets live?\"** Not in `appsettings.json`, not in source control and not in pipeline variables scattered across teams.\n\n**How I wire it up:**\n- Enable a **system-assigned managed identity** on the App Service or Function.\n- Grant that identity the **Key Vault Secrets User** role on the vault.\n- In code, use `DefaultAzureCredential`, which uses the managed identity in Azure and the developer's Azure CLI or Visual Studio login locally.\n- Add Key Vault as a configuration provider. A secret named `ConnectionStrings--Db` maps to `ConnectionStrings:Db`.\n\n| Option | When |\n|---|---|\n| Configuration provider | Load all app secrets at startup, read via `IOptions` |\n| `SecretClient` | Fetch on demand, specific versions |\n| App Service Key Vault references `@Microsoft.KeyVault(...)` | Zero code: platform injects into app settings |\n| `CryptographyClient` | Sign/encrypt without exporting the key |\n\n**Real-world:** In my experience, combining managed identity with Key Vault removes almost all secrets. Even better, many services (SQL, Storage, Service Bus) support **Entra ID authentication directly**, so no connection string secret is needed at all.\n\n**Pitfalls and follow-ups:**\n- Calling Key Vault on **every request** leads to throttling (service limits) and latency. Load at startup or cache, and use `ReloadInterval` for rotation.\n- Using legacy **access policies** instead of RBAC.\n- Not enabling purge protection for keys used in encryption.\n- \"How do you rotate secrets?\" Use Key Vault rotation policies or Event Grid `SecretNearExpiry` events, with the app reloading periodically.\n- `DefaultAzureCredential` in production: in my experience it's better to use `ManagedIdentityCredential` explicitly to avoid slow credential-chain probing.",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Key Vault configuration provider + SecretClient with managed identity",
+              "code": "// dotnet add package Azure.Extensions.AspNetCore.Configuration.Secrets\n// dotnet add package Azure.Identity\nusing Azure.Identity;\nusing Azure.Security.KeyVault.Secrets;\n\nvar builder = WebApplication.CreateBuilder(args);\n\nvar vaultUri = new Uri(builder.Configuration[\"KeyVault:Uri\"]!); // https://myvault.vault.azure.net/\n\n// Managed identity in Azure, Azure CLI / VS login locally\nvar credential = builder.Environment.IsDevelopment()\n    ? new DefaultAzureCredential()\n    : (Azure.Core.TokenCredential)new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned);\n\n// Secrets become configuration: \"ConnectionStrings--Db\" -> ConnectionStrings:Db\nbuilder.Configuration.AddAzureKeyVault(vaultUri, credential, new AzureKeyVaultConfigurationOptions\n{\n    ReloadInterval = TimeSpan.FromMinutes(30)   // pick up rotated secrets\n});\n\n// Direct access for on-demand secrets (singleton, thread-safe)\nbuilder.Services.AddSingleton(new SecretClient(vaultUri, credential));\n\nvar app = builder.Build();\n\napp.MapGet(\"/health/secrets\", async (SecretClient client) =>\n{\n    KeyVaultSecret secret = await client.GetSecretAsync(\"PartnerApiKey\");\n    return Results.Ok(new { secret.Name, secret.Properties.Version }); // never return the value\n});\n\napp.Run();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Messaging & Storage",
+      "questions": [
+        {
+          "id": "service-bus-vs-storage-queue",
+          "question": "Azure Service Bus vs Azure Storage Queue: what's the difference and when do you use each?",
+          "difficulty": "Hard",
+          "tags": [
+            "azure",
+            "messaging",
+            "queues",
+            "cloud"
+          ],
+          "definition": "Both are Azure services for asynchronous, decoupled communication through queued messages.\n**Azure Storage Queues** are part of an Azure Storage account.\nThey are a simple, very cheap and highly scalable queue for messages up to 64 KB, which expire after 7 days by default (the TTL is configurable).\n**Azure Service Bus** is a fully featured enterprise message broker.\nIt supports queues and publish/subscribe **topics with subscriptions**, sessions for FIFO ordering, duplicate detection, transactions and dead-letter queues.\nService Bus also supports scheduled messages and larger messages: 256 KB on Standard and up to 100 MB on Premium.\nIn .NET, the modern SDKs are `Azure.Storage.Queues` and `Azure.Messaging.ServiceBus`.",
+          "answer": "I'd summarise it as: **Storage Queue for simple, high-volume work items; Service Bus for business messaging that needs guarantees.**\n\n| Feature | Storage Queue | Service Bus |\n|---|---|---|\n| Max message size | 64 KB | 256 KB (Standard) / 100 MB (Premium) |\n| Ordering (FIFO) | Best effort | Guaranteed with **sessions** |\n| Pub/Sub | No | **Topics + subscriptions with filters** |\n| Dead-letter queue | No (manual poison queue) | Built-in DLQ |\n| Duplicate detection | No | Yes (by `MessageId`) |\n| Transactions | No | Yes |\n| Delivery | At-least-once, visibility timeout | At-least-once (Peek-Lock) or at-most-once (Receive-and-Delete) |\n| Queue size | Up to storage account capacity (TBs) | 1–80 GB per entity |\n| Cost | Very low | Higher (Premium is dedicated) |\n\n**When I choose Service Bus:** order processing, payments and integration events that several services subscribe to. It also fits workflows needing ordering per customer (sessions) or a reliable DLQ for poison messages.\n\n**When I choose Storage Queue:** simple background jobs such as thumbnail generation, very large backlogs, or the cheapest option for internal work queues.\n\nIn my experience, the key operational concept is **Peek-Lock**. The message is locked while you process it, and you then `Complete` it, or `Abandon` it so it is retried. After `MaxDeliveryCount` failures it moves to the DLQ.\n\n**Pitfalls and follow-ups:**\n- Consumers must be **idempotent**, because both services deliver at least once.\n- Creating `ServiceBusClient` per message. It is expensive and should be a **singleton**.\n- Lock expiry on long processing. Use `MaxAutoLockRenewalDuration`.\n- \"What about Event Grid and Event Hubs?\" Event Grid handles reactive event notifications, and Event Hubs handles high-throughput telemetry streaming. Neither is a command queue.",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Service Bus: send to a topic and process with Peek-Lock (Azure.Messaging.ServiceBus)",
+              "code": "// dotnet add package Azure.Messaging.ServiceBus\n// dotnet add package Azure.Identity\nawait using var client = new ServiceBusClient(\n    \"mybus.servicebus.windows.net\", new DefaultAzureCredential());  // register as singleton in DI\n\n// --- Publish (topic -> many subscriptions) ---\nServiceBusSender sender = client.CreateSender(\"order-events\");\nvar msg = new ServiceBusMessage(BinaryData.FromObjectAsJson(new { OrderId = 42, Total = 99.5m }))\n{\n    MessageId = \"order-42-created\",       // enables duplicate detection\n    SessionId = \"customer-7\",             // FIFO per customer (session-enabled entity)\n    Subject = \"OrderCreated\",\n    ContentType = \"application/json\"\n};\nmsg.ApplicationProperties[\"region\"] = \"EU\"; // used by subscription SQL filters\nawait sender.SendMessageAsync(msg);\n\n// --- Consume (Peek-Lock) ---\nServiceBusSessionProcessor processor = client.CreateSessionProcessor(\"order-events\", \"billing\",\n    new ServiceBusSessionProcessorOptions\n    {\n        AutoCompleteMessages = false,\n        MaxConcurrentSessions = 8,\n        MaxAutoLockRenewalDuration = TimeSpan.FromMinutes(5)\n    });\n\nprocessor.ProcessMessageAsync += async args =>\n{\n    var order = args.Message.Body.ToObjectFromJson<OrderCreated>();\n    await billing.ChargeAsync(order);                    // idempotent handler\n    await args.CompleteMessageAsync(args.Message);       // remove from queue\n};\nprocessor.ProcessErrorAsync += args =>\n{\n    logger.LogError(args.Exception, \"Service Bus error on {Entity}\", args.EntityPath);\n    return Task.CompletedTask;                           // after MaxDeliveryCount -> DLQ\n};\nawait processor.StartProcessingAsync();"
+            },
+            {
+              "language": "csharp",
+              "title": "Storage Queue: simple work item with visibility timeout (Azure.Storage.Queues)",
+              "code": "// dotnet add package Azure.Storage.Queues\nvar queue = new QueueClient(\n    new Uri(\"https://mystorage.queue.core.windows.net/thumbnails\"),\n    new DefaultAzureCredential());\nawait queue.CreateIfNotExistsAsync();\n\nawait queue.SendMessageAsync(BinaryData.FromObjectAsJson(new { BlobName = \"photos/cat.jpg\" }));\n\n// Receive: message becomes invisible for 2 minutes while we work on it\nQueueMessage[] messages = await queue.ReceiveMessagesAsync(maxMessages: 16,\n    visibilityTimeout: TimeSpan.FromMinutes(2));\n\nforeach (var m in messages)\n{\n    if (m.DequeueCount > 5)                               // manual poison handling\n    {\n        await poisonQueue.SendMessageAsync(m.Body);\n        await queue.DeleteMessageAsync(m.MessageId, m.PopReceipt);\n        continue;\n    }\n    await thumbnails.CreateAsync(m.Body.ToObjectFromJson<ThumbnailJob>());\n    await queue.DeleteMessageAsync(m.MessageId, m.PopReceipt); // ack\n}"
+            }
+          ]
+        },
+        {
+          "id": "azure-blob-storage",
+          "question": "How do you work with Azure Blob Storage in .NET, including secure uploads and SAS tokens?",
+          "difficulty": "Medium",
+          "tags": [
+            "azure",
+            "storage",
+            "security",
+            "performance"
+          ],
+          "definition": "**Azure Blob Storage** is Microsoft's object storage service for large amounts of unstructured data such as images, documents, backups, logs and videos.\nData is organised as **storage account → containers → blobs**.\nBlobs come in three types: block blobs (most files), append blobs (logs) and page blobs (VM disks).\nAccess tiers (**Hot, Cool, Cold, Archive**) trade storage cost against access cost and latency.\nLifecycle management policies can move or delete blobs automatically.\nAccess is secured with Entra ID RBAC (e.g. *Storage Blob Data Contributor*) or with time-limited **Shared Access Signatures (SAS)**.\nThe modern .NET SDK is `Azure.Storage.Blobs`, with `BlobServiceClient`, `BlobContainerClient` and `BlobClient`.",
+          "answer": "In my experience, the main design decision is **who moves the bytes**: the API or the client directly.\n\n**Pattern 1: upload through the API.** This is simple and lets you validate and scan the file. However, the API pays for bandwidth and memory, so I **stream** the file (`OpenReadStream()`) and never buffer it in a `byte[]`.\n\n**Pattern 2: valet key with SAS.** The API issues a short-lived, narrowly scoped SAS URL (one blob, create/write only, valid for 10 minutes). The browser uploads directly to Blob Storage. This scales much better for large files, and Event Grid's `BlobCreated` event can trigger post-processing.\n\n| Auth option | Use |\n|---|---|\n| Managed identity + RBAC | Server-to-storage (preferred) |\n| **User delegation SAS** | Client direct access, signed with Entra ID credentials |\n| Service SAS / account SAS | Signed with account key (avoid; key leak = full access) |\n| Public container | Only for truly public static assets (prefer CDN) |\n\nKey points I mention:\n- Prefer **user delegation SAS**. It is signed via Entra ID, can be revoked by revoking the delegation key, and needs no account keys. Ideally, disable shared key access on the account.\n- Keep SAS lifetimes short, use HTTPS only and grant minimal permissions.\n- For performance, use parallel uploads via `StorageTransferOptions`, a CDN or Front Door for downloads, and the right tier plus lifecycle rules for cost.\n\n**Pitfalls and follow-ups:**\n- Trusting the client's file name or content type. Generate the blob names yourself (GUIDs).\n- Forgetting **CORS** on the storage account for browser uploads.\n- Archive-tier blobs need **rehydration** (hours) before reading.\n- \"How do you prevent overwrites?\" Use the `If-None-Match: *` condition or blob versioning and soft delete.",
+          "code": [
+            {
+              "language": "csharp",
+              "title": "Streamed upload + user delegation SAS (Azure.Storage.Blobs)",
+              "code": "// dotnet add package Azure.Storage.Blobs\n// dotnet add package Azure.Identity\nbuilder.Services.AddSingleton(new BlobServiceClient(\n    new Uri(\"https://mystorage.blob.core.windows.net\"), new DefaultAzureCredential()));\n\n// 1) Upload through the API - streamed, never buffered in memory\napp.MapPost(\"/files\", async (IFormFile file, BlobServiceClient svc) =>\n{\n    var container = svc.GetBlobContainerClient(\"uploads\");\n    var blob = container.GetBlobClient($\"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}\");\n\n    await using var stream = file.OpenReadStream();\n    await blob.UploadAsync(stream, new BlobUploadOptions\n    {\n        HttpHeaders = new BlobHttpHeaders { ContentType = file.ContentType },\n        Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All }, // never overwrite\n        TransferOptions = new StorageTransferOptions { MaximumConcurrency = 4 }\n    });\n    return Results.Created(blob.Uri, new { blob.Name });\n}).DisableAntiforgery();\n\n// 2) Valet key: short-lived user delegation SAS for direct browser upload\napp.MapGet(\"/files/upload-url\", async (BlobServiceClient svc) =>\n{\n    var expires = DateTimeOffset.UtcNow.AddMinutes(10);\n    UserDelegationKey key = await svc.GetUserDelegationKeyAsync(DateTimeOffset.UtcNow, expires);\n\n    var blob = svc.GetBlobContainerClient(\"uploads\").GetBlobClient($\"{Guid.NewGuid()}.bin\");\n    var sas = new BlobSasBuilder(BlobSasPermissions.Create | BlobSasPermissions.Write, expires)\n    {\n        BlobContainerName = blob.BlobContainerName,\n        BlobName = blob.Name,\n        Protocol = SasProtocol.Https\n    };\n    var uri = new BlobUriBuilder(blob.Uri)\n    {\n        Sas = sas.ToSasQueryParameters(key, svc.AccountName)\n    }.ToUri();\n    return Results.Ok(new { uploadUrl = uri, expires });\n});"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

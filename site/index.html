@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>.NET Interview Prep</title>
+  <meta name="description" content="Searchable .NET interview questions and answers with code samples — C#, SQL, ASP.NET, Web API, EF Core, Dapper, Azure and more.">
+  <meta name="theme-color" content="#512bd4">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23512bd4'/%3E%3Ctext x='32' y='42' font-family='Arial' font-weight='700' font-size='26' fill='white' text-anchor='middle'%3E.N%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/styles.css?v=__BUILD_VERSION__">
+  <script>
+    // apply saved theme before paint
+    try { var t = localStorage.getItem('dip.theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    window.__BUILD__ = '__BUILD_VERSION__';
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <button class="icon-btn only-mobile" id="menuBtn" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <a class="brand" href="#/">
+      <span class="brand-mark">.N</span>
+      <span class="brand-text">Interview<span class="brand-dim">Prep</span></span>
+    </a>
+
+    <div class="search" id="searchBox" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="suggestions">
+      <svg class="search-ico" viewBox="0 0 24 24" width="18" height="18"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="searchInput" type="search" autocomplete="off" spellcheck="false"
+             placeholder="Search questions, headings, topics…" aria-label="Search" aria-autocomplete="list" aria-controls="suggestions">
+      <div class="scope" role="group" aria-label="Search scope">
+        <button type="button" data-scope="head" class="scope-btn" title="Search question titles, headings, topics & tags">Headings</button>
+        <button type="button" data-scope="all" class="scope-btn" title="Search everything, including answers and code">Full text</button>
+      </div>
+      <kbd class="kbd only-desktop">/</kbd>
+      <div class="suggestions" id="suggestions" role="listbox" hidden></div>
+    </div>
+
+    <nav class="top-actions">
+      <a class="icon-btn" href="#/bookmarks" title="Bookmarks" aria-label="Bookmarks">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 3h12v18l-6-4-6 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <span class="badge" id="bmCount" hidden>0</span>
+      </a>
+      <button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle dark mode">
+        <svg class="sun" viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" width="20" height="20"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Topics">
+      <div class="sidebar-inner" id="sidebarInner"></div>
+    </aside>
+    <div class="scrim" id="scrim" hidden></div>
+    <main id="main" class="main" tabindex="-1">
+      <div class="loading">Loading content…</div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="assets/js/app.js?v=__BUILD_VERSION__"></script>
+</body>
+</html>
