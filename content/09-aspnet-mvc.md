@@ -296,3 +296,149 @@ public class ProfileController(AppDbContext db) : Controller
     }
 }
 ```
+### Q: What are Action Filters in ASP.NET Core MVC?
+difficulty: Medium
+tags: aspnet-core, mvc, action-filters, filters
+id: action-filters
+
+#### Definition
+An Action Filter in ASP.NET Core MVC is a component that executes logic before and after a controller action method runs.
+It implements the `IActionFilter` or `IAsyncActionFilter` interface.
+It allows developers to execute reusable logic without duplicating code across multiple action methods.
+The `OnActionExecuting` method runs before the action method executes.
+The `OnActionExecuted` method runs after the action method executes.
+The asynchronous equivalent uses `OnActionExecutionAsync` to handle asynchronous operations.
+Action filters can be applied globally, at the controller level, or to individual action methods.
+They are commonly used for logging, input validation, auditing, and measuring execution time.
+They are part of the ASP.NET Core MVC filter pipeline and execute after authorization and resource filters.
+
+#### Answer
+
+**Short answer:** Action Filters in ASP.NET Core MVC allow me to execute reusable logic before and after a controller action method runs. I use them to handle cross-cutting concerns such as logging, execution-time measurement, and auditing without repeating the same code in every action.
+
+**How it works / Key points**
+
+- **Before execution:** `OnActionExecuting` runs immediately before the controller action method executes, allowing me to inspect action arguments or perform preliminary checks.
+- **After execution:** `OnActionExecuted` runs after the action method finishes, allowing me to inspect the action result or exception information.
+- **Asynchronous execution:** I use `IAsyncActionFilter` and `OnActionExecutionAsync` when the filter needs to perform asynchronous operations.
+- **Application scope:** I can register a filter globally, apply it to an entire controller using an attribute, or apply it to a specific action method.
+- **Custom filters:** I can create a reusable filter by implementing `IActionFilter` or inheriting from `ActionFilterAttribute`.
+- **Execution order:** Authorization filters execute before resource filters, followed by action filters, and then result filters. Exception filters have their own exception-handling stage in the MVC pipeline.
+
+**Comparison**
+
+| Aspect | Action Filter | Middleware |
+|---|---|---|
+| Execution scope | MVC controller actions | HTTP request pipeline |
+| Context | MVC action context | HTTP context |
+| Typical use | Action logging and auditing | Global request logging and exception handling |
+| MVC dependency | Yes | No |
+| Access to action arguments | Yes | Not directly |
+
+**Real-world usage:** In a banking application, I can use an Action Filter to log when an employee accesses a loan application, including the action name and execution duration. This helps with application monitoring and auditing. For sensitive banking operations, I would also implement proper authentication, authorization, and secure audit logging rather than relying on the filter alone.
+
+**Common pitfalls**
+
+- Using an Action Filter for logic that should run before MVC, such as middleware-level request processing.
+- Forgetting to call `next()` in an asynchronous filter, which prevents the action from executing.
+- Assuming an Action Filter replaces authorization or business validation.
+- Logging sensitive information, such as passwords, access tokens, or complete financial details.
+
+**Likely follow-up questions**
+
+- **What are the types of filters in ASP.NET Core MVC?** Authorization, resource, action, exception, and result filters.
+- **What is the difference between `IActionFilter` and `IAsyncActionFilter`?** The first uses synchronous callbacks, while the second supports asynchronous execution.
+- **Can I stop an action from executing inside a filter?** Yes, I can set `ActionExecutingContext.Result` before the action runs.
+- **What is the difference between an Action Filter and an Authorization Filter?** Authorization filters determine whether a request is authorized, while Action Filters wrap controller action execution.
+
+#### Code
+
+**Example 1: Creating a custom Action Filter**
+
+```csharp title="Custom Action Filter"
+using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.Logging;
+
+public class LogActionFilter : IActionFilter
+{
+    private readonly ILogger<LogActionFilter> _logger;
+
+    public LogActionFilter(ILogger<LogActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        // Runs before the controller action.
+        _logger.LogInformation(
+            "Starting action: {Action}",
+            context.ActionDescriptor.DisplayName);
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        // Runs after the controller action.
+        _logger.LogInformation(
+            "Completed action: {Action}",
+            context.ActionDescriptor.DisplayName);
+    }
+}
+```
+
+**Example 2: Registering and applying the filter**
+
+```csharp title="Register and Use Action Filter"
+using Microsoft.AspNetCore.Mvc;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register MVC and the custom filter.
+builder.Services.AddScoped<LogActionFilter>();
+builder.Services.AddControllersWithViews();
+
+var app = builder.Build();
+
+app.UseRouting();
+app.UseAuthorization();
+
+app.MapDefaultControllerRoute();
+app.Run();
+
+public class LoansController : Controller
+{
+    [ServiceFilter(typeof(LogActionFilter))]
+    public IActionResult Details(int id)
+    {
+        // The filter runs before and after this action.
+        return Content($"Loan ID: {id}");
+    }
+}
+```
+
+**Example 3: Action Filter execution flow**
+
+```text title="Flow: Action Filter Pipeline"
+[Browser Request]
+       |
+       v
+[Middleware Pipeline]
+       |
+       v
+[Routing and Authorization]
+       |
+       v
+[Action Filter: Before]
+       |
+       v
+[Controller Action]
+       |
+       v
+[Action Filter: After]
+       |
+       v
+[Result Execution]
+       |
+       v
+[HTTP Response]
+```
