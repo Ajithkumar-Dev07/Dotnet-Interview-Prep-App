@@ -442,3 +442,403 @@ public class LoansController : Controller
        v
 [HTTP Response]
 ```
+### Q: What is the middleware pipeline in ASP.NET Core, and how does it process requests?
+difficulty: Medium
+tags: aspnet-core, middleware, request-pipeline
+id: middleware-pipeline
+
+#### Definition
+The middleware pipeline is an ordered chain of components that processes HTTP requests and responses in ASP.NET Core.
+Each middleware component receives an `HttpContext` containing information about the current request and response.
+A component can perform work before and after invoking the next component.
+It passes control downstream by calling and awaiting the `next` delegate.
+It can also short-circuit the pipeline by producing a response without calling `next`.
+Request processing follows registration order, while code after `await next(...)` executes as the calls unwind in reverse order.
+Middleware handles concerns such as exception handling, routing, authentication, authorization, and logging.
+In ASP.NET Core 8 and 9, developers typically configure the pipeline in `Program.cs`.
+
+#### Answer
+**Short answer:** I'd explain the middleware pipeline as the ordered sequence of components that handles an HTTP request. Each component can inspect the request, call the next component, or finish processing immediately.
+
+**How it works / Key points**
+- I'd configure middleware in `Program.cs`, using methods such as `Use`, `UseMiddleware<T>()`, and built-in extensions.
+- Each component receives an `HttpContext`; `await next(context)` transfers control to the next registered delegate.
+- I'd place request processing before `next` and completion work afterward, remembering that exceptions can skip ordinary code after `await`.
+- Short-circuiting means returning a response without calling `next`; static-file middleware can do this when it serves a file.
+- I'd register exception handling early so it can catch failures from downstream components.
+- For endpoint-based security, I'd place routing before authentication and authorization, with authentication first among those two.
+
+**Comparison**
+| Aspect | `Use` | `Run(RequestDelegate)` |
+|---|---|---|
+| Purpose | Add middleware | Add terminal middleware |
+| Receives `next` | Yes | No |
+| Continues downstream | When `next` is called | Never |
+
+I'd distinguish `Run(RequestDelegate)` from parameterless `app.Run()`, which starts the application.
+
+**Real-world usage:** In a student-management API, I'd use middleware for centralized exception handling, request timing, and authentication. This keeps shared HTTP concerns outside my controllers and applies consistent behavior across endpoints.
+
+**Common pitfalls:**
+- Registering authorization before authentication can prevent access checks from seeing the authenticated identity.
+- Forgetting `next` unintentionally prevents downstream execution.
+- Changing headers after the response starts can throw an exception; I'd set them beforehand or use `OnStarting`.
+
+**Likely follow-up questions:**
+- **Middleware or MVC filters?** I'd use middleware for HTTP pipeline concerns and filters for MVC action concerns.
+- **How do I branch the pipeline?** I'd use `Map` for path-based branches or `UseWhen` for conditional processing.
+- **Can response processing always run?** I'd use `try/finally` for cleanup that must execute when downstream processing throws.
+
+**Reference:** [Microsoft Learn: ASP.NET Core middleware](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/?view=aspnetcore-9.0).
+
+#### Code
+```csharp title="Program.cs: timing middleware and a terminal response"
+using System.Diagnostics;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+// This middleware wraps every downstream request.
+app.Use(async (context, next) =>
+{
+    var timer = Stopwatch.StartNew();
+
+    // Set headers before downstream code starts the response.
+    context.Response.Headers["X-App-Name"] = "StudentApi";
+
+    try
+    {
+        await next(context); // Invoke the next request delegate.
+    }
+    finally
+    {
+        timer.Stop(); // Also executes if downstream code throws.
+        app.Logger.LogInformation(
+            "{Method} {Path} completed processing in {ElapsedMs} ms",
+            context.Request.Method,
+            context.Request.Path,
+            timer.ElapsedMilliseconds);
+    }
+});
+
+// This overload registers terminal middleware.
+app.Run(async context =>
+{
+    await context.Response.WriteAsJsonAsync(
+        new { Message = "Student API is running" });
+});
+
+app.Run(); // Start the web application.
+```
+
+```text title="Flow: middleware execution and reverse unwinding"
+[Client]
+   |
+   v
+[Middleware A: before next]
+   |
+   v
+[Middleware B: before next]
+   |
+   v
+[Endpoint: produce response]
+   |
+   v
+[Middleware B: after next]
+   |
+   v
+[Middleware A: after next]
+   |
+   v
+[Client receives response]
+
+Short-circuit alternative:
+[Middleware A] --> [Middleware B: respond]
+                          |
+                          v
+                  [A resumes after next]
+
+The endpoint is skipped when B does not call next.
+```
+### Q: How do you handle exceptions in an ASP.NET Core MVC application?
+difficulty: Medium
+tags: aspnet-core, mvc, exception-handling, middleware
+id: mvc-exception-handling
+
+#### Definition
+Exception handling is the process of detecting runtime failures and responding in a controlled manner.
+In ASP.NET Core MVC 8 and 9, exception-handling middleware provides centralized handling for unhandled exceptions.
+The `UseExceptionHandler` extension registers middleware that catches exceptions from downstream request processing.
+MVC exception filters provide specialized handling for exceptions within supported stages of MVC execution.
+Local `try-catch` blocks handle specific exceptions when meaningful recovery is possible.
+Development environments can display diagnostic details through the Developer Exception Page.
+Production applications should return safe error responses and record diagnostic information in server logs.
+Expected outcomes such as invalid input or missing records should normally use validation or appropriate action results.
+
+#### Answer
+**Short answer:** I'd use `UseExceptionHandler` for centralized exception handling in ASP.NET Core MVC 8 or 9. I'd combine it with targeted `try-catch` blocks for recoverable failures and exception filters when handling must depend on the selected action.
+
+**How it works / Key points**
+- I'd register exception middleware early in `Program.cs` so it surrounds downstream processing.
+- I'd use the Developer Exception Page only in development because it can expose sensitive diagnostic information.
+- In production, I'd configure `UseExceptionHandler("/error")` to re-execute the request through an error endpoint when the response has not started.
+- I'd return a generic message with HTTP `500`, while retaining diagnostic details in server logs.
+- I'd keep the error action accessible anonymously and avoid restricting it to GET because re-execution preserves the original HTTP method.
+- I'd return `NotFound()` for a missing student and validation errors for invalid input instead of throwing exceptions.
+
+**Comparison**
+| Aspect | Exception middleware | MVC exception filter | Local `try-catch` |
+|---|---|---|---|
+| Scope | Downstream HTTP pipeline | Supported MVC execution stages | Wrapped statements |
+| Best use | Centralized fallback | Action-specific behavior | Specific recovery |
+| View-rendering exceptions | Can catch before response starts | Does not handle | Only if rendering is inside the block |
+
+**Real-world usage:** In a student-management application, I'd show a friendly error page when an unexpected database failure occurs. I'd include a request identifier so support can locate the corresponding logs. The example returns plain text to remain self-contained; a normal MVC application could return an error view.
+
+**Common pitfalls:**
+- I'd avoid returning exception messages or stack traces to users.
+- I'd avoid empty catch blocks and duplicate exception logging.
+- When rethrowing, I'd use `throw;` to preserve the original stack trace.
+
+**Likely follow-up questions:**
+- **Does this handle every 404?** No; I'd use status-code pages for responses without exceptions.
+- **What if the response has started?** The middleware cannot re-execute the request.
+- **What about MVC 5?** I'd discuss `HandleErrorAttribute` and `Application_Error` separately.
+
+**Reference:** [Microsoft Learn: Handle errors in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling?view=aspnetcore-9.0).
+
+#### Code
+```csharp title="Program.cs: configure centralized exception handling"
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddControllersWithViews();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage(); // Diagnostic details locally.
+}
+else
+{
+    app.UseExceptionHandler("/error"); // Catch downstream failures.
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+app.UseStaticFiles();
+app.UseRouting();
+
+// Includes attribute routes such as /error.
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
+
+app.Run();
+```
+
+```csharp title="HomeController.cs: safe error endpoint and test action"
+using System;
+using System.Diagnostics;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+public sealed class HomeController : Controller
+{
+    public IActionResult Index()
+    {
+        return Content("Student management application");
+    }
+
+    // Development/testing only: remove this action before deployment.
+    public IActionResult TestFailure()
+    {
+        throw new InvalidOperationException("Simulated database failure.");
+    }
+
+    [AllowAnonymous]
+    [Route("/error")] // Accept the original request's HTTP method.
+    [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None,
+        NoStore = true)]
+    public IActionResult Error()
+    {
+        var requestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier;
+
+        // The middleware already logs the exception in .NET 8/9.
+        return new ContentResult
+        {
+            StatusCode = StatusCodes.Status500InternalServerError,
+            ContentType = "text/plain; charset=utf-8",
+            Content = $"Something went wrong. Request ID: {requestId}"
+        };
+    }
+}
+```
+
+```text title="Flow: production MVC exception handling"
+[Browser request]
+        |
+        v
+[Exception middleware wraps downstream execution]
+        |
+        v
+[MVC action or view throws]
+        |
+        v
+[Exception propagates to middleware]
+        |
+        v
+[Log exception; response has not started]
+        |
+        v
+[Re-execute request at /error]
+        |
+        v
+[Error action returns safe HTTP 500 response]
+        |
+        v
+[Browser receives generic error and request ID]
+```
+### Q: How do database migrations work in an ASP.NET Core MVC application using Entity Framework Core?
+difficulty: Medium
+tags: mvc, ef-core, migrations, sql-server
+id: mvc-ef-core-migration-process
+
+#### Definition
+Database migrations are versioned changes that evolve a database schema alongside an application's data model.
+Here, migration means EF Core database migration in ASP.NET Core MVC 8 or 9.
+MVC itself defines application structure and does not provide a database migration mechanism.
+EF Core compares the current entity model with its stored model snapshot to generate changes.
+Each migration normally contains an `Up` method for applying changes and a `Down` method for reversing them.
+The database provider translates migration operations into database-specific SQL.
+EF Core records applied migrations in the `__EFMigrationsHistory` table by default.
+Developers review, test, and deploy migrations to keep application code and database structure compatible.
+
+#### Answer
+**Short answer:** I'd interpret migration here as EF Core database migration, rather than moving an application between frameworks. I'd use it to version schema changes in an ASP.NET Core MVC application without manually recreating the database.
+
+**How it works / Key points**
+- I'd install `Microsoft.EntityFrameworkCore.SqlServer`, `Microsoft.EntityFrameworkCore.Design`, and the `dotnet-ef` tool, keeping their versions aligned with my EF Core version.
+- I'd define entity classes, configure their mappings in a `DbContext`, and register that context using `UseSqlServer`.
+- I'd run `dotnet ef migrations add InitialCreate`; EF Core compares its model with the previous snapshot, not the live database schema.
+- I'd inspect the generated `Up`, `Down`, and snapshot changes, then apply the migration locally using `dotnet ef database update`.
+- After changing an entity, I'd create another migration, such as `dotnet ef migrations add AddStudentEmail`, and review it before applying.
+- For production, I'd generate a reviewable script using `dotnet ef migrations script --idempotent --output migrations.sql`, test it against representative data, and deploy through a controlled release.
+
+**Comparison**
+| Aspect | Add migration | Update database |
+|---|---|---|
+| Command | `dotnet ef migrations add Name` | `dotnet ef database update` |
+| Changes | Migration files and snapshot | Database schema and history |
+| Connects to apply schema changes | No | Yes |
+
+**Real-world usage:** In a student-management application, I'd add a nullable `Email` property and generate a migration. For a mandatory field, I'd plan existing-data backfilling before enforcing the constraint.
+
+**Common pitfalls:**
+- I'd check for destructive drop-and-add operations when renaming columns.
+- I'd avoid mixing `EnsureCreated()` with migrations.
+- I'd create corrective migrations instead of deleting migrations already deployed to shared databases.
+
+**Likely follow-up questions:**
+- **How would I roll back?** I'd target a previous migration with `database update`, after reviewing potential data loss.
+- **Can I remove an unapplied migration?** Yes; I'd use `dotnet ef migrations remove`.
+- **Does rollback restore deleted data?** No; schema reversal does not replace backups.
+
+**Reference:** [Microsoft Learn: EF Core migrations](https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/).
+
+#### Code
+```csharp title="Program.cs: SQL Server context and student entity"
+using Microsoft.AspNetCore.Builder;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllersWithViews();
+
+// Configure ConnectionStrings__SchoolDb outside source control.
+var connectionString = builder.Configuration
+    .GetConnectionString("SchoolDb")
+    ?? throw new System.InvalidOperationException(
+        "Configure the SchoolDb connection string.");
+
+builder.Services.AddDbContext<SchoolDbContext>(options =>
+    options.UseSqlServer(connectionString));
+
+var app = builder.Build();
+app.UseRouting();
+app.MapDefaultControllerRoute();
+app.Run();
+
+public sealed class SchoolDbContext(
+    DbContextOptions<SchoolDbContext> options) : DbContext(options)
+{
+    public DbSet<Student> Students => Set<Student>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Student>()
+            .Property(student => student.Name).HasMaxLength(100);
+    }
+}
+
+public sealed class Student
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Email { get; set; } // Nullable for existing rows.
+}
+```
+
+```sql title="Inspect the applied migration history and student schema"
+-- Run in the target SQL Server database after applying migrations.
+-- Read history; do not edit it manually.
+SELECT
+    MigrationId,
+    ProductVersion
+FROM dbo.__EFMigrationsHistory
+ORDER BY MigrationId;
+
+-- Verify columns created from the entity mapping.
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    CHARACTER_MAXIMUM_LENGTH,
+    IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = N'dbo'
+  AND TABLE_NAME = N'Students'
+ORDER BY ORDINAL_POSITION;
+```
+
+```text title="Flow: EF Core migration generation and deployment"
+[Create or modify entity model]
+                |
+                v
+[Run: dotnet ef migrations add MigrationName]
+                |
+                v
+[Compare current model with stored snapshot]
+                |
+                v
+[Generate Up, Down, metadata, and updated snapshot]
+                |
+                v
+[Review changes and test on a development database]
+                |
+                v
+[Generate and review production SQL script]
+                |
+                v
+[Deploy schema changes and record migration history]
+
+MVC controllers use the updated schema through DbContext.
+```
